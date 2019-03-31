@@ -6,6 +6,15 @@
 Operate at the speed of [BEAM](http://erlang.org/faq/implementations.html)
 with [BeamParticle](http://beamparticle.org).
 
+> IMPORTANT: This repository is under heavy development and subject to change.
+>            Please wait till it starts working again.
+>
+> Intent: Breaking beamparticle into core and other packages.
+> The core package will have minimal functionality and will be
+> very lightweight version of the original beamparticle.
+> This is done to avoid all-in-one package, which was
+> convinent but was too big to handle.
+
 > There is a very good blog on this before this project
 > hosts sufficient documentation.
 > https://medium.com/@nsharma9/beamparticle-a-polyglot-dynamic-programming-engine-1250109af1cd

@@ -1,4 +1,0 @@
-[submodule "support/pynode/Pyrlang"]
-	path = support/pynode/Pyrlang
-	url = https://github.com/beamparticle/Pyrlang
-	branch = dev-zero-cpu

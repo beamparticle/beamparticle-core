@@ -59,7 +59,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-          port = undefined :: alcove_drv:ref()
+          port = undefined :: beamparticle_container_util:ref()
 }).
 
 %%%===================================================================
@@ -444,71 +444,52 @@ handle_log_details(Drv, Path, StartSha1, EndSha1, RelativeFilePath) ->
     get_git_log_details(Drv, Path, StartSha1, EndSha1, RelativeFilePath,
                 ?GIT_BACKEND_DEFAULT_COMMAND_TIMEOUT_MSEC).
 
--spec handle_current_branch(Drv :: alcove_drv:ref(), Path :: string()) -> binary().
+-spec handle_current_branch(Drv :: beamparticle_container_util:ref(), Path :: string()) -> binary().
 handle_current_branch(Drv, Path) ->
     lager:debug("handle_current_branch(~p, ~p)", [Drv, Path]),
     Args = beamparticle_git_util:git_branch_command(list, current),
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         ?GIT_BACKEND_DEFAULT_COMMAND_TIMEOUT_MSEC),
     lager:debug("current branch = ~p", [Content]),
     Content.
 
--spec handle_list_branches(Drv :: alcove_drv:ref(), Path :: string()) -> [map()].
+-spec handle_list_branches(Drv :: beamparticle_container_util:ref(), Path :: string()) -> [map()].
 handle_list_branches(Drv, Path) ->
     lager:debug("handle_list_branches(~p, ~p)", [Drv, Path]),
     Args = beamparticle_git_util:git_branch_command(list_branches),
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         ?GIT_BACKEND_DEFAULT_COMMAND_TIMEOUT_MSEC),
     beamparticle_git_util:parse_git_list_branches(Content).
 
--spec handle_git_show(Drv :: alcove_drv:ref(), Path :: string(),
+-spec handle_git_show(Drv :: beamparticle_container_util:ref(), Path :: string(),
                       GitObjectName :: binary()) -> binary().
 handle_git_show(Drv, Path, GitObjectName) ->
     lager:debug("handle_git_show(~p, ~p, ~p)", [Drv, Path, GitObjectName]),
     Args = [<<"show">>, GitObjectName],
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         ?GIT_BACKEND_DEFAULT_COMMAND_TIMEOUT_MSEC),
     {ok, Content}.
 
--spec handle_git_revert(Drv :: alcove_drv:ref(), Path :: string(),
+-spec handle_git_revert(Drv :: beamparticle_container_util:ref(), Path :: string(),
                         GitObjectName :: binary()) -> binary().
 handle_git_revert(Drv, Path, GitObjectName) ->
     lager:debug("handle_git_revert(~p, ~p, ~p)", [Drv, Path, GitObjectName]),
     Args = [<<"reset">>, <<"HEAD">>, GitObjectName],
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         ?GIT_BACKEND_DEFAULT_COMMAND_TIMEOUT_MSEC),
     Content.
 
-execute_command(Drv, Path, Command, Args, TimeoutMsec) ->
-    {ok, ChildPID} = alcove:fork(Drv, []),
-    alcove:chdir(Drv, [ChildPID], Path),
-    EnvironmentVars = [],
-    ok = alcove:execve(Drv, [ChildPID], Command, [Command | Args],
-                       EnvironmentVars),
-    lager:debug("git-backend running command ~s ~s", [Command, Args]),
-    receive
-        {alcove_event, Drv, [ChildPID], {exit_status, ExitCode}} = Event ->
-            lager:debug("git-backend received event ~p", [Event]),
-            Stdout = iolist_to_binary(alcove:stdout(Drv, [ChildPID])),
-            Stderr = iolist_to_binary(alcove:stderr(Drv, [ChildPID])),
-            {ExitCode, Stdout, Stderr}
-    after
-        TimeoutMsec ->
-            alcove:kill(Drv, [], ChildPID, 9),
-            {error, timeout}
-    end.
-
 git_init(Drv, Path, Username, Email, TimeoutMsec) ->
-    {0, _, _} = execute_command(
+    {0, _, _} = beamparticle_util:execute_command(
                   Drv, Path, ?GIT_BINARY, ["init"], TimeoutMsec),
-    {0, _, _} = execute_command(
+    {0, _, _} = beamparticle_util:execute_command(
                   Drv, Path, ?GIT_BINARY, ["config", "user.name", Username],
                   TimeoutMsec),
-    {0, _, _} = execute_command(
+    {0, _, _} = beamparticle_util:execute_command(
                   Drv, Path, ?GIT_BINARY, ["config", "user.email", Email],
                   TimeoutMsec).
 
@@ -528,7 +509,7 @@ git_add_readme(Drv, Path, TimeoutMsec) ->
 
 git_add_branches(Drv, Path, Branches, TimeoutMsec) ->
     lists:foreach(fun(X) ->
-                          {0, _, _} = execute_command(
+                          {0, _, _} = beamparticle_util:execute_command(
                                         Drv, Path, ?GIT_BINARY,
                                         ["branch", X], TimeoutMsec)
                   end, Branches).
@@ -549,7 +530,7 @@ git_save_file(FullFilename, Content) ->
 
 git_stage_file(Drv, Path, FullFilename, TimeoutMsec) ->
     lager:debug("git_stage_file(~p)", [{Drv, Path, FullFilename, TimeoutMsec}]),
-    {0, _, _} = execute_command(
+    {0, _, _} = beamparticle_util:execute_command(
                   Drv, Path, ?GIT_BINARY, ["add", FullFilename],
                   TimeoutMsec),
     ok.
@@ -560,19 +541,19 @@ git_commit(Drv, Path, Msg, TimeoutMsec) ->
         %% commit ony when a valid commit message is provided
         %% else just save to disk, which is done already
         true ->
-            CommitResult = execute_command(
+            CommitResult = beamparticle_util:execute_command(
                              Drv, Path, ?GIT_BINARY, ["commit", "-m", Msg],
                              TimeoutMsec),
             case CommitResult of
                 {0, _, _} ->
-                    {0, HashStdout, _} = execute_command(
+                    {0, HashStdout, _} = beamparticle_util:execute_command(
                                   Drv, Path, ?GIT_BINARY, ["log", "-n1", "--format=\"%H\"",
                                                               "-n", "1"],
                                   TimeoutMsec),
                     %% when running git command via exec it returns the
                     %% hash wrapped in double quotes, so remove them.
                     Hash = re:replace(string:trim(HashStdout), <<"\"">>, <<>>, [{return, binary}, global]),
-                    {0, ChangedFilesWithCommitStdout, _} = execute_command(
+                    {0, ChangedFilesWithCommitStdout, _} = beamparticle_util:execute_command(
                                   Drv, Path, ?GIT_BINARY, ["show", "--oneline",
                                                               "--name-only", Hash],
                                   TimeoutMsec),
@@ -588,17 +569,17 @@ git_commit(Drv, Path, Msg, TimeoutMsec) ->
             ok
     end.
 
--spec get_git_status(Drv :: alcove_drv:ref(), Path :: binary(),
+-spec get_git_status(Drv :: beamparticle_container_util:ref(), Path :: binary(),
                      TimeoutMsec :: non_neg_integer()) -> map().
 get_git_status(Drv, Path, TimeoutMsec) ->
     lager:debug("git_status(~p)", [{Drv, Path, TimeoutMsec}]),
     Args = beamparticle_git_util:git_status_command(),
-    {0, StatusContent, _} = execute_command(
+    {0, StatusContent, _} = beamparticle_util:execute_command(
                   Drv, Path, ?GIT_BINARY, Args,
                   TimeoutMsec),
     beamparticle_git_util:parse_git_status(StatusContent).
 
--spec get_git_log(Drv :: alcove_drv:ref(),
+-spec get_git_log(Drv :: beamparticle_container_util:ref(),
                   Path :: binary(),
                   HashType :: short | long,
                   RelativeFilePath :: binary(),
@@ -606,26 +587,26 @@ get_git_status(Drv, Path, TimeoutMsec) ->
 get_git_log(Drv, Path, HashType, RelativeFilePath, TimeoutMsec) ->
     lager:debug("get_git_log(~p)", [{Drv, HashType, RelativeFilePath, TimeoutMsec}]),
     Args = beamparticle_git_util:git_log_command(HashType, RelativeFilePath),
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         TimeoutMsec),
     lager:debug("Content = ~p", [Content]),
     binary:split(Content, <<"\0">>, [global, trim]).
 
--spec get_git_log_details(Drv :: alcove_drv:ref(),
+-spec get_git_log_details(Drv :: beamparticle_container_util:ref(),
                           Path :: binary(),
                           RelativeFilePath :: binary(),
                           TimeoutMsec :: non_neg_integer()) -> [map()].
 get_git_log_details(Drv, Path, RelativeFilePath, TimeoutMsec) ->
     lager:debug("get_git_log_details(~p)", [{Drv, RelativeFilePath, TimeoutMsec}]),
     Args = beamparticle_git_util:git_log_details_command(RelativeFilePath),
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         TimeoutMsec),
     lager:debug("Content = ~p", [Content]),
     beamparticle_git_util:parse_git_log_details(Content).
 
--spec get_git_log_details(Drv :: alcove_drv:ref(),
+-spec get_git_log_details(Drv :: beamparticle_container_util:ref(),
                           Path :: binary(),
                           StartSha1 :: binary(),
                           EndSha1 :: binary(),
@@ -634,7 +615,7 @@ get_git_log_details(Drv, Path, RelativeFilePath, TimeoutMsec) ->
 get_git_log_details(Drv, Path, StartSha1, EndSha1, RelativeFilePath, TimeoutMsec) ->
     lager:debug("get_git_log_details(~p)", [{Drv, Path, StartSha1, EndSha1, RelativeFilePath, TimeoutMsec}]),
     Args = beamparticle_git_util:git_log_details_command(StartSha1, EndSha1, RelativeFilePath),
-    {0, Content, _} = execute_command(
+    {0, Content, _} = beamparticle_util:execute_command(
                         Drv, Path, ?GIT_BINARY, Args,
                         TimeoutMsec),
     lager:debug("Content = ~p", [Content]),

@@ -27,13 +27,22 @@
 %%%-------------------------------------------------------------------
 -module(beamparticle_container_util).
 
+-include("beamparticle_constants.hrl").
+
+-ifdef('CONTAINER_ALCOVE').
 -include_lib("alcove/include/alcove.hrl").
+-endif.
 
 -export([create_driver/2,
-         create_child/7]).
+         execute_command/5]).
+
+-export_type([ref/0]).
+
+-ifdef('CONTAINER_ALCOVE').
+
+-export([create_child/7]).
 
 -export_type([create_option/0]).
-
 -type create_option() :: ctldir
     | rlimit_fsize
     | rlimit_nofile
@@ -45,12 +54,108 @@
     | cpuset_mems
     | memory_memsw_limit_in_bytes
     | memory_limit_in_bytes.
+-type ref() :: alcove_drv:ref().
+
+-else.
+
+%% erlexec has Pid, OsPid
+-type ref() :: {pid(), non_neg_integer()}.
+
+-endif.
+
 
 %% API
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+-ifdef('CONTAINER_ALCOVE').
+
+execute_command(Drv, Path, Command, Args, TimeoutMsec) ->
+    {ok, ChildPID} = alcove:fork(Drv, []),
+    alcove:chdir(Drv, [ChildPID], Path),
+    EnvironmentVars = [],
+    ok = alcove:execve(Drv, [ChildPID], Command, [Command | Args],
+                       EnvironmentVars),
+    lager:debug("git-backend running command ~s ~s", [Command, Args]),
+    receive
+        {alcove_event, Drv, [ChildPID], {exit_status, ExitCode}} = Event ->
+            lager:debug("git-backend received event ~p", [Event]),
+            Stdout = iolist_to_binary(alcove:stdout(Drv, [ChildPID])),
+            Stderr = iolist_to_binary(alcove:stderr(Drv, [ChildPID])),
+            {ExitCode, Stdout, Stderr}
+    after
+        TimeoutMsec ->
+            alcove:kill(Drv, [], ChildPID, 9),
+            {error, timeout}
+    end.
+
+-else.
+
+execute_command({Pid, _OsPid}, Path, Command, Args, TimeoutMsec) ->
+    exec:send(Pid, <<"cd ", Path/binary, "; echo {{{{DONE}}}}\n">>),
+    loop_receive_response([], [], <<"{{{{DONE}}}}\n">>, TimeoutMsec),
+    AllArgs = lists:join(<<" ">>, Args),
+    CommandBin = iolist_to_binary([Command | AllArgs]),
+    exec:send(Pid, CommandBin),
+    exec:send(Pid, <<";echo $?; echo {{{{DONE}}}}\n">>),
+    case loop_receive_response([], [], <<"{{{{DONE}}}}\n">>, TimeoutMsec) of
+        {Stdout, Stderr} ->
+            [H | RestStdout] = Stdout,
+            ExitCode = binary_to_integer(
+                         string:trim(
+                           iolist_to_binary(H))),
+            {ExitCode, lists:reverse(RestStdout), lists:reverse(Stderr)};
+        _ ->
+            {1, [], []}
+    end.
+
+loop_receive_response(StdoutAccIn, StderrAccIn, TerminatingResponse, TimeoutMsec) ->
+    T1 = erlang:system_time(millisecond),
+    receive
+        {stdout, _SameOsPid, Response} ->
+            T2 = erlang:system_time(millisecond),
+            ResponseBin = iolist_to_binary(Response),
+            ResponseBytes = byte_size(ResponseBin),
+            RemainingLen = ResponseBytes - byte_size(TerminatingResponse),
+            case RemainingLen >= 0 of
+                true ->
+                    case ResponseBin of
+                        <<RemainingResponse:RemainingLen/binary, TerminatingResponse/binary>> ->
+                            case RemainingResponse of
+                                <<>> ->
+                                    {StdoutAccIn, StderrAccIn};
+                                _ ->
+                                    {[RemainingResponse | StdoutAccIn],
+                                     StderrAccIn}
+                            end;
+                        _ ->
+                            loop_receive_response([Response | StdoutAccIn],
+                                                  StderrAccIn,
+                                                  TerminatingResponse,
+                                                  TimeoutMsec - (T2 - T1))
+                    end;
+                false ->
+                        loop_receive_response([Response | StdoutAccIn],
+                                              StderrAccIn,
+                                              TerminatingResponse,
+                                              TimeoutMsec - (T2 - T1))
+            end;
+        {stderr, _SameOsPid, Response} ->
+            T2 = erlang:system_time(millisecond),
+            loop_receive_response(StdoutAccIn,
+                                  [Response | StderrAccIn],
+                                  TerminatingResponse,
+                                  TimeoutMsec - (T2 - T1))
+    after
+        TimeoutMsec ->
+            {StdoutAccIn, StderrAccIn}
+    end.
+
+-endif.
+
+-ifdef('CONTAINER_ALCOVE').
 
 -spec create_driver(simple | sandbox | namespace, Opts :: [{create_option(), term()}]) ->
     {ok, Drv :: alcove_drv:ref()}.
@@ -108,6 +213,19 @@ create_driver(namespace, Opts) ->
     end,
     {ok, Drv}.
 
+-else.
+
+-spec create_driver(simple, Opts :: [{term(), term()}]) ->
+    {ok, Drv :: ref()}.
+create_driver(simple, _Opts) ->
+    CommandShell = application:get_env(?APPLICATION_NAME, command_shell, "/bin/bash"),
+    {ok, Pid, OsPid} = exec:run_link(CommandShell, [stdin, {stdout, self()}, {stderr, self()}]),
+    {ok, {Pid, OsPid}}.
+
+-endif.
+
+
+-ifdef('CONTAINER_ALCOVE').
 
 %% Note that Arg0 is absolute filename (that is with absolute path)
 %% Note that EnvironmentVars must be like the following
@@ -201,6 +319,8 @@ create_child(namespace, Drv, GroupName, Arg0, Args, EnvironmentVars, _Opts) ->
     ok = alcove:execve(Drv, [ChildPID], Arg0, [Arg0 | Args], EnvironmentVars),
 
     {ok, ChildPID}.
+
+-endif.
 
 %%%===================================================================
 %%% Internal functions
